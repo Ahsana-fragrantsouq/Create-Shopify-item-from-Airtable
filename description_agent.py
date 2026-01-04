@@ -113,6 +113,40 @@ def parse_notes_cell(notes_cell: Any) -> Dict[str, Any]:
     # 3) Fallback: treat as a general list -> heart
     return {"top": [], "heart": _split_notes(s), "base": [], "sources": []}
 
+def split_notes_string(value: Any) -> List[str]:
+    """
+    Notes cell -> list of notes.
+    Accepts comma / semicolon / pipe / newline separated strings.
+    """
+    if value is None:
+        return []
+    s = str(value).strip()
+    if not s or s.lower() in {"nan", "none", "null"}:
+        return []
+
+    parts = re.split(r"[,\|;/•\n]+", s)
+    out: List[str] = []
+    for p in parts:
+        p = p.strip()
+        if not p:
+            continue
+        p = re.sub(r"\(.*?\)", "", p).strip()
+        p = re.sub(r"\s+", " ", p)
+        p = p.title()
+        if 2 <= len(p) <= 50:
+            out.append(p)
+
+    # de-dupe preserve order
+    seen = set()
+    deduped = []
+    for n in out:
+        k = n.lower()
+        if k not in seen:
+            seen.add(k)
+            deduped.append(n)
+
+    return deduped[:8]
+
 # ---------- Prompts ----------
 CREATOR_SYSTEM_PROMPT = """
 You are an expert SEO copywriter for Shopify perfume listings.
