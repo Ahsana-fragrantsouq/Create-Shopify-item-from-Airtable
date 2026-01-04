@@ -181,15 +181,23 @@ def _sanitize_html_basic(html_text: str, perfume_name: str) -> str:
     wait=wait_exponential(multiplier=1, min=1, max=10),
     retry=retry_if_exception_type((RateLimitError, APIError)),
 )
-def generate_description_from_notes(
+def generate_description_from_three_note_strings(
     perfume_name: str,
     brand_name: Optional[str],
-    notes_cell: Any,
+    top_notes_str: Any,
+    middle_notes_str: Any,
+    base_notes_str: Any,
     model: str = CONFIG["default_model"],
 ) -> str:
     brand_display = (brand_name or "").strip() or (perfume_name.split()[0] if perfume_name else "Fragrances")
     brand_slug = _brand_slug(brand_display)
-    notes_obj = parse_notes_cell(notes_cell)
+
+    notes_obj = {
+        "top": split_notes_string(top_notes_str),
+        "heart": split_notes_string(middle_notes_str),  # keep your internal key as "heart"
+        "base": split_notes_string(base_notes_str),
+        "sources": [],
+    }
 
     facts = {
         "perfume_name": perfume_name,
@@ -226,6 +234,7 @@ def generate_description_from_notes(
         final_html = creator_html
 
     return _sanitize_html_basic(final_html, perfume_name)
+
 
 # ---------- Excel runner ----------
 def process_excel_generate_descriptions(

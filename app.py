@@ -1,5 +1,5 @@
 from flask import Flask
-from description_agent import generate_description_from_web
+from description_agent import generate_description_from_three_note_strings
 from webhook_handlers import handle_airtable_webhook
 from create_shopify_item import create_shopify_bp
 import logging
@@ -17,9 +17,13 @@ def generate_description():
     data = request.get_json()
     perfume_name = data.get("perfume_name")
     brand_name = data.get("brand_name")
+    top_notes = data.get("top_notes")
+    middle_notes = data.get("middle_notes")
+    base_notes = data.get("base_notes")
+        
     if not perfume_name:
         return jsonify({"error": "perfume_name is required"}), 400
-    description_html = generate_description_from_web(perfume_name, brand_name)
+    description_html = generate_description_from_three_note_strings(perfume_name, brand_name,top_notes,middle_notes,base_notes)
     return jsonify({"description": description_html})
 
 
