@@ -330,6 +330,10 @@ def generate_description_from_three_note_strings(
     }
     has_notes = any(len(v) > 0 for v in notes_obj.values())
 
+    print("DEBUG notes_obj =", notes_obj)
+    print("DEBUG has_notes =", has_notes)
+
+
     if debug:
         print("=" * 60)
         print("Perfume:", perfume_name)
@@ -411,6 +415,8 @@ def generate_description_from_three_note_strings(
 
     # Final cleanup
     final_html = re.sub(r"\n\s*\n+", "\n", final_html).strip()
+    print("DEBUG final_html (after enforcement) =", final_html)
+
     return final_html
 
 # ---------- API Helper Function ----------
