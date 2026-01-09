@@ -43,7 +43,6 @@ def process_notes_input(notes_input: Any) -> List[str]:
     if notes_input is None:
         return []
 
-    # If it's already a list
     if isinstance(notes_input, list):
         notes_list = []
         for item in notes_input:
@@ -53,31 +52,27 @@ def process_notes_input(notes_input: Any) -> List[str]:
                     notes_list.append(cleaned.title())
         return notes_list[: CONFIG["max_notes_per_group"]]
 
-    # If it's a string
     if isinstance(notes_input, str):
         s = notes_input.strip()
         if not s or s.lower() in {"nan", "none", "null", "n/a", "na", ""}:
             return []
 
-        # Split by common delimiters
-        parts = re.split(r"[,\|;/•\n]+", s)
+        # Split by common delimiters + also split on "and"
+        parts = re.split(r"[,\|;/•\n]+|\s+\band\b\s+", s, flags=re.IGNORECASE)
+
         out: List[str] = []
         for p in parts:
             p = p.strip()
             if not p:
                 continue
 
-            # Remove content in parentheses
             p = re.sub(r"\(.*?\)", "", p).strip()
-            # Normalize whitespace
             p = re.sub(r"\s+", " ", p)
-            # Convert to Title Case
             p = p.title()
 
             if 2 <= len(p) <= 50:
                 out.append(p)
 
-        # De-dupe preserving order
         seen = set()
         deduped = []
         for n in out:
@@ -99,10 +94,12 @@ Return ONLY valid HTML (no markdown, no explanations).
 ALLOWED TAGS ONLY: <h2>, <h3>, <p>, <ul>, <li>, <strong>, <a>
 No other tags. No inline styles. No emojis.
 
-GOAL:
-Write elegant, factual, sales-oriented perfume copy.
+CRITICAL:
+- The <h2> MUST match the provided perfume_name EXACTLY.
+- If notes are provided, you MUST include every note at least once (spelling preserved).
+- NEVER mention missing notes or say "notes not provided".
 
-MUST FOLLOW THIS STRUCTURE EXACTLY:
+MUST FOLLOW THIS STRUCTURE:
 1) <h2>{perfume_name}</h2>
 2) <p>Intro (2–3 sentences)</p>
 3) <h3>The Experience</h3>
@@ -121,10 +118,6 @@ IF (and only if) at least one note exists in notes.top / notes.heart / notes.bas
 
 6) Final line MUST be:
 <p>Discover more from <a href="/collections/{brand_slug}">{brand_name} perfumes</a></p>
-
-CRITICAL:
-- If notes are provided, you MUST include every note at least once (spelling preserved).
-- NEVER mention missing notes or say "notes not provided".
 """
 
 VALIDATOR_SYSTEM_PROMPT = """
@@ -145,14 +138,33 @@ Return JSON:
 """
 
 # ============================================================
-# Helpers (structure enforcement + deterministic note inclusion)
+# Hard-enforcement helpers (fix name drift, missing notes, dup H2)
 # ============================================================
 
+def _collapse_duplicate_h2(html_text: str) -> str:
+    """Keep only the first <h2>...</h2> and remove any additional h2 blocks."""
+    if not html_text:
+        return ""
+    h2s = list(re.finditer(r"(?is)<h2>\s*.*?\s*</h2>", html_text))
+    if len(h2s) <= 1:
+        return html_text.strip()
+
+    first = h2s[0].group(0)
+    remainder = re.sub(r"(?is)<h2>\s*.*?\s*</h2>\s*", "", html_text).strip()
+    return (first + "\n" + remainder).strip()
+
+def _force_exact_h2(html_text: str, perfume_name: str) -> str:
+    """Ensure the first <h2> equals the exact perfume_name; if no h2, prepend it."""
+    html_text = html_text or ""
+    desired = f"<h2>{html.escape(perfume_name)}</h2>"
+    if re.search(r"(?is)<h2>\s*.*?\s*</h2>", html_text):
+        html_text = re.sub(r"(?is)<h2>\s*.*?\s*</h2>", desired, html_text, count=1)
+    else:
+        html_text = desired + "\n" + html_text
+    return html_text.strip()
+
 def _ensure_required_sections(content_html: str) -> str:
-    """
-    Ensure The Experience and Perfect For exist.
-    Does NOT force Signature Notes when notes are empty.
-    """
+    """Ensure The Experience and Perfect For exist."""
     content_html = content_html or ""
 
     if not re.search(r"(?is)<h3>\s*The Experience\s*</h3>", content_html):
@@ -169,16 +181,6 @@ def _ensure_required_sections(content_html: str) -> str:
 
     return content_html.strip()
 
-def _all_notes_flat(notes_obj: Dict[str, List[str]]) -> List[str]:
-    out: List[str] = []
-    for k in ("top", "heart", "base"):
-        vals = notes_obj.get(k) or []
-        if isinstance(vals, list):
-            for n in vals:
-                if isinstance(n, str) and n.strip():
-                    out.append(n.strip())
-    return out
-
 def _build_signature_notes_ul(notes_obj: Dict[str, List[str]]) -> str:
     li_parts: List[str] = []
     if notes_obj.get("top"):
@@ -192,90 +194,61 @@ def _build_signature_notes_ul(notes_obj: Dict[str, List[str]]) -> str:
         return ""
     return "<ul>\n" + "\n".join(li_parts) + "\n</ul>"
 
-def _ensure_notes_present(content_html: str, notes_obj: Dict[str, List[str]]) -> str:
+def _ensure_signature_notes_if_needed(html_text: str, notes_obj: Dict[str, List[str]]) -> str:
     """
-    If any notes exist:
-      - Ensure Signature Notes heading exists
-      - Ensure the UL under it is canonical
-      - Ensure every note appears at least once (append "Includes" li if needed)
-    If no notes exist: do nothing (do not invent notes).
+    If notes exist, force a canonical Signature Notes section.
+    This does NOT rely on the model.
     """
-    content_html = content_html or ""
-    all_notes = _all_notes_flat(notes_obj)
-    if not all_notes:
-        return content_html.strip()
+    html_text = html_text or ""
 
-    canonical_ul = _build_signature_notes_ul(notes_obj)
-    if not canonical_ul:
-        return content_html.strip()
+    has_notes = any((notes_obj.get(k) or []) for k in ("top", "heart", "base"))
+    if not has_notes:
+        # Remove accidental Signature Notes if any (optional)
+        html_text = re.sub(r"(?is)<h3>\s*Signature Notes\s*</h3>\s*<ul>.*?</ul>", "", html_text)
+        return html_text.strip()
 
-    # Ensure Signature Notes heading exists. Insert before Perfect For if possible.
-    if not re.search(r"(?is)<h3>\s*Signature Notes\s*</h3>", content_html):
-        if re.search(r"(?is)<h3>\s*Perfect For\s*</h3>", content_html):
-            content_html = re.sub(
-                r"(?is)(<h3>\s*Perfect For\s*</h3>)",
-                f"<h3>Signature Notes</h3>\n{canonical_ul}\n\\1",
-                content_html,
-                count=1,
-            )
-        else:
-            content_html += f"\n<h3>Signature Notes</h3>\n{canonical_ul}"
+    ul = _build_signature_notes_ul(notes_obj)
+    if not ul:
+        return html_text.strip()
 
-    # Replace first UL after Signature Notes, else add it
-    if re.search(r"(?is)(<h3>\s*Signature Notes\s*</h3>\s*)(<ul>.*?</ul>)", content_html):
-        content_html = re.sub(
-            r"(?is)(<h3>\s*Signature Notes\s*</h3>\s*)(<ul>.*?</ul>)",
-            r"\1" + canonical_ul,
-            content_html,
-            count=1,
+    block = "<h3>Signature Notes</h3>\n" + ul
+
+    # Remove any existing Signature Notes block (so we can reinsert cleanly)
+    html_text = re.sub(r"(?is)<h3>\s*Signature Notes\s*</h3>\s*<ul>.*?</ul>", "", html_text).strip()
+
+    # Insert before Perfect For if possible, otherwise before internal link, otherwise append
+    if re.search(r"(?is)<h3>\s*Perfect For\s*</h3>", html_text):
+        html_text = re.sub(
+            r"(?is)(<h3>\s*Perfect For\s*</h3>)",
+            block + "\n\\1",
+            html_text,
+            count=1
+        )
+    elif re.search(r'(?is)<p>\s*Discover\s+more\s+from\s*<a\b', html_text):
+        html_text = re.sub(
+            r'(?is)(<p>\s*Discover\s+more\s+from\s*<a\b[^>]*>.*?</a>\s*</p>)',
+            block + "\n\\1",
+            html_text,
+            count=1
         )
     else:
-        content_html = re.sub(
-            r"(?is)(<h3>\s*Signature Notes\s*</h3>)",
-            r"\1\n" + canonical_ul,
-            content_html,
-            count=1,
-        )
+        html_text = html_text.rstrip() + "\n" + block
 
-    # Ensure every note appears somewhere (case-insensitive)
-    lower = content_html.lower()
-    missing = [n for n in all_notes if n.lower() not in lower]
+    return html_text.strip()
 
-    if missing:
-        # Append missing into the Signature Notes UL
-        content_html = re.sub(
-            r"(?is)(<h3>\s*Signature Notes\s*</h3>\s*<ul>.*?)(</ul>)",
-            lambda m: m.group(1)
-            + f'\n<li><strong>Includes:</strong> {", ".join(missing)}</li>\n</ul>',
-            content_html,
-            count=1,
-        )
+def _ensure_internal_link_last(html_text: str, brand_slug: str, brand_name: str) -> str:
+    """Ensure exactly one internal link paragraph, and it is the last line."""
+    html_text = html_text or ""
+    canonical = f'<p>Discover more from <a href="/collections/{brand_slug}">{html.escape(brand_name)} perfumes</a></p>'
 
-    return content_html.strip()
-
-def _ensure_internal_link(content_html: str, brand_slug: str, brand_name: str) -> str:
-    """
-    Ensure the internal link exists exactly once and is the final line.
-    """
-    content_html = content_html or ""
-    brand_slug_safe = (brand_slug or "fragrances").strip() or "fragrances"
-    brand_name_safe = html.escape(brand_name or "Fragrances")
-
-    canonical = (
-        f'<p>Discover more from <a href="/collections/{brand_slug_safe}">{brand_name_safe} perfumes</a></p>'
-    )
-
-    # Remove any existing "Discover more from" paragraphs
-    content_html = re.sub(
+    # Remove any existing discover-more paragraph variants
+    html_text = re.sub(
         r'(?is)<p>\s*Discover\s+more\s+from\s*<a\b[^>]*>.*?</a>\s*</p>\s*',
         '',
-        content_html
+        html_text
     ).strip()
 
-    # Append canonical as last line
-    if content_html:
-        return (content_html.rstrip() + "\n" + canonical).strip()
-    return canonical
+    return (html_text + "\n" + canonical).strip()
 
 # =========================
 # Strict Sanitizer
@@ -313,7 +286,6 @@ def sanitize_html_strict(content_html: str, perfume_name: str) -> str:
         if is_closing:
             return f"</{tagname}>"
 
-        # opening tags
         if tagname == "a":
             href_match = re.search(r'(?is)\bhref\s*=\s*(".*?"|\'.*?\'|[^\s>]+)', full)
             href_val = href_match.group(1) if href_match else '"/collections/fragrances"'
@@ -323,15 +295,13 @@ def sanitize_html_strict(content_html: str, perfume_name: str) -> str:
 
         return f"<{tagname}>"
 
-    # Replace all tags
     content_html = re.sub(r"(?is)</?([a-z0-9]+)\b[^>]*>", _tag_replacer, content_html)
 
-    # Ensure H2 with perfume name exists
+    # Ensure correct H2 exists (and later we will collapse duplicates anyway)
     escaped_name = html.escape(perfume_name)
     if not re.search(rf"(?is)<h2>\s*{re.escape(escaped_name)}\s*</h2>", content_html):
         content_html = f"<h2>{escaped_name}</h2>\n" + content_html
 
-    # Clean whitespace
     content_html = re.sub(r"\n\s*\n+", "\n", content_html).strip()
     return content_html
 
@@ -350,7 +320,6 @@ def generate_description_from_three_note_strings(
     model: str = CONFIG["default_model"],
     debug: bool = False,
 ) -> str:
-    # Brand info (avoid guessing first word; use Fragrances if missing)
     brand_display = (brand_name or "").strip() or "Fragrances"
     brand_slug = _brand_slug(brand_display)
 
@@ -377,9 +346,8 @@ def generate_description_from_three_note_strings(
         "output_rule": "Return ONLY HTML using allowed tags. No markdown. No explanations.",
     }
 
-    # ---------- Step 1: Create ----------
-    creator_html = ""
     try:
+        # Step 1: Create
         creator_response = safe_openai_call(
             model=model,
             messages=[
@@ -394,19 +362,12 @@ def generate_description_from_three_note_strings(
         if debug:
             print("Creator HTML (raw):", creator_html[:600])
 
-        # ---------- Step 2: Validate ----------
+        # Step 2: Validate
         validator_response = safe_openai_call(
             model=model,
             messages=[
                 {"role": "system", "content": VALIDATOR_SYSTEM_PROMPT},
-                {
-                    "role": "user",
-                    "content": json.dumps(
-                        {"facts": facts, "original_html": creator_html},
-                        ensure_ascii=False,
-                        indent=2,
-                    ),
-                },
+                {"role": "user", "content": json.dumps({"facts": facts, "original_html": creator_html}, ensure_ascii=False, indent=2)},
             ],
             response_format={"type": "json_object"},
             temperature=0.1,
@@ -423,7 +384,6 @@ def generate_description_from_three_note_strings(
         if debug:
             print("Generation error:", str(e))
 
-        # fallback (no invented notes)
         final_html = (
             f"<h2>{html.escape(perfume_name)}</h2>\n"
             f"<p>An exquisite fragrance by {html.escape(brand_display)} with a captivating, refined presence.</p>\n"
@@ -433,18 +393,24 @@ def generate_description_from_three_note_strings(
             "<p>Evenings out, special occasions, and everyday confidence.</p>\n"
         )
 
-    # ---------- Deterministic enforcement ----------
+    # ---------- HARD ENFORCEMENT (fixes your missing notes + duplicate h2) ----------
     final_html = _ensure_required_sections(final_html)
-    final_html = _ensure_notes_present(final_html, notes_obj)     # guaranteed note inclusion if notes exist
-    final_html = _ensure_internal_link(final_html, brand_slug, brand_display)
 
-    # ---------- Strict sanitization ----------
+    # Force exact perfume name and remove duplicate h2
+    final_html = _force_exact_h2(final_html, perfume_name)
+    final_html = _collapse_duplicate_h2(final_html)
+
+    # Force notes if present
+    final_html = _ensure_signature_notes_if_needed(final_html, notes_obj)
+
+    # Force internal link last
+    final_html = _ensure_internal_link_last(final_html, brand_slug, brand_display)
+
+    # Sanitize last
     final_html = sanitize_html_strict(final_html, perfume_name)
 
-    if debug:
-        print("Final HTML length:", len(final_html))
-        print("=" * 60)
-
+    # Final cleanup
+    final_html = re.sub(r"\n\s*\n+", "\n", final_html).strip()
     return final_html
 
 # ---------- API Helper Function ----------
