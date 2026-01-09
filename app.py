@@ -1,5 +1,5 @@
 from flask import Flask
-from description_agent import generate_description_from_three_note_strings, generate_description_for_api
+from description_agent import generate_description_from_three_note_strings, generate_description_for_api, CONFIG
 from webhook_handlers import handle_airtable_webhook
 from create_shopify_item import create_shopify_bp
 import logging
