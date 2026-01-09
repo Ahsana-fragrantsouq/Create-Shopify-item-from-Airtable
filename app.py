@@ -10,6 +10,98 @@ app = Flask(__name__)
 # ✅ Then register blueprints
 app.register_blueprint(create_shopify_bp)
 
+# ---------- API Helper Function ----------
+def generate_description_for_api(
+    perfume_name: str,
+    brand_name: str = None,
+    top_notes: Any = None,
+    middle_notes: Any = None,
+    base_notes: Any = None,
+    model: str = CONFIG["default_model"]
+) -> Dict[str, Any]:
+    """
+    Wrapper function specifically for API calls.
+    Returns a dict with the result and metadata.
+    """
+    try:
+        description_html = generate_description_from_three_note_strings(
+            perfume_name=perfume_name,
+            brand_name=brand_name,
+            top_notes=top_notes,
+            middle_notes=middle_notes,
+            base_notes=base_notes,
+            model=model,
+            debug=False  # Set to True for debugging
+        )
+        
+        return {
+            "success": True,
+            "description": description_html,
+            "perfume_name": perfume_name,
+            "brand_name": brand_name or "Not specified",
+            "length": len(description_html),
+            "model_used": model
+        }
+        
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+            "perfume_name": perfume_name,
+            "fallback_description": f"<h2>{html.escape(perfume_name)}</h2><p>An exquisite fragrance with a captivating presence.</p>"
+        }
+
+# ---------- Your Flask API Endpoint (to be used in your app) ----------
+
+@app.route("/generate", methods=["POST"])
+def generate_description():
+    from flask import request, jsonify
+    
+    data = request.get_json()
+    
+    # Required field
+    perfume_name = data.get("perfume_name")
+    if not perfume_name:
+        return jsonify({"error": "perfume_name is required"}), 400
+    
+    # Optional fields with defaults
+    brand_name = data.get("brand_name")
+    top_notes = data.get("top_notes")
+    middle_notes = data.get("middle_notes")
+    base_notes = data.get("base_notes")
+    
+    # Optional: model parameter
+    model = data.get("model", CONFIG["default_model"])
+    
+    # Generate description
+    result = generate_description_for_api(
+        perfume_name=perfume_name,
+        brand_name=brand_name,
+        top_notes=top_notes,
+        middle_notes=middle_notes,
+        base_notes=base_notes,
+        model=model
+    )
+    
+    if result["success"]:
+        return jsonify({
+            "success": True,
+            "description": result["description"],
+            "metadata": {
+                "perfume_name": result["perfume_name"],
+                "brand_name": result["brand_name"],
+                "length": result["length"],
+                "model_used": result["model_used"]
+            }
+        })
+    else:
+        return jsonify({
+            "success": False,
+            "error": result["error"],
+            "fallback_description": result.get("fallback_description", "")
+        }), 500
+"""
+
 
 @app.route("/generate", methods=["POST"])
 def generate_description():
@@ -25,7 +117,7 @@ def generate_description():
         return jsonify({"error": "perfume_name is required"}), 400
     description_html = generate_description_from_three_note_strings(perfume_name, brand_name,top_notes,middle_notes,base_notes)
     return jsonify({"description": description_html})
-
+"""
 
 @app.route("/airtable-webhook", methods=["POST"])
 def airtable_webhook_route():
