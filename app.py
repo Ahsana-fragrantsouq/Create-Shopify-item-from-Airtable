@@ -18,8 +18,9 @@ app.register_blueprint(create_shopify_bp)
 def generate_description():
     from flask import request, jsonify
     
-    data = request.get_json()
-    
+    data = request.get_json(silent=True) or {}
+    print("DEBUG incoming JSON =", data)
+
     # Required field
     perfume_name = data.get("perfume_name")
     if not perfume_name:
