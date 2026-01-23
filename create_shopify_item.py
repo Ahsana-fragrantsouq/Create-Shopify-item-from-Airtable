@@ -10,27 +10,22 @@ import unicodedata
 import re
 
 # ---------------------------
-# 🔐 SHOPIFY CLIENT CREDS
-# ---------------------------
-SHOPIFY_CLIENT_ID = os.getenv("SHOPIFY_CLIENT_ID")
-SHOPIFY_CLIENT_SECRET = os.getenv("SHOPIFY_CLIENT_SECRET")
-
-# ---------------------------
 # CONFIGURATION
 # ---------------------------
-SHOP = os.environ.get("SHOPIFY_SHOP")
-TOKEN = os.environ.get("SHOPIFY_API_TOKEN")
+SHOP = os.environ.get("SHOPIFY_SHOP")  # fragrantsouq.myshopify.com
+TOKEN = os.environ.get("SHOPIFY_API_TOKEN")  # shpat_********
 API_VERSION = os.getenv("SHOPIFY_API_VERSION", "2025-01")
 
 AIRTABLE_BASE_ID = os.environ.get("AIRTABLE_BASE_ID")
 AIRTABLE_API_KEY = os.environ.get("AIRTABLE_API_KEY")
 AIRTABLE_TABLE_NAME = "French Inventories"
 
-
-
+# ---------------------------
+# UTILS
+# ---------------------------
 def convert_title_to_image_name(product_title):
-    product_name_clean = unicodedata.normalize('NFKD', product_title)
-    product_name_clean = product_name_clean.encode('ascii', 'ignore').decode('ascii')
+    product_name_clean = unicodedata.normalize("NFKD", product_title)
+    product_name_clean = product_name_clean.encode("ascii", "ignore").decode("ascii")
 
     brand_replacements = {
         "Victor&Rolf": "Viktor_Rolf",
@@ -39,7 +34,7 @@ def convert_title_to_image_name(product_title):
         "Yves Saint Laurent": "Yves_Saint_Laurent",
         "Jean Paul Gaultier": "Jean_Paul_Gaultier",
         "Salvatore Ferragamo": "Salvatore_Ferragamo",
-        "Tonino Lamborghini": "Tonino_Lamborghini"
+        "Tonino Lamborghini": "Tonino_Lamborghini",
     }
 
     for old, new in brand_replacements.items():
@@ -47,61 +42,28 @@ def convert_title_to_image_name(product_title):
 
     product_name_clean = product_name_clean.replace("'", "_")
     product_name_clean = product_name_clean.replace("&", "and")
-    product_name_clean = re.sub(r'([A-Za-z])(\d)', r'\1_\2', product_name_clean)
-    product_name_clean = re.sub(r'(\d)([A-Za-z])', r'\1_\2', product_name_clean)
-    product_name_clean = re.sub(r'[®™°º"+]+', '', product_name_clean)
-    product_name_clean = re.sub(r'[.,:/()\-]', ' ', product_name_clean)
-    product_name_clean = re.sub(r'\s+', ' ', product_name_clean).strip()
+    product_name_clean = re.sub(r"([A-Za-z])(\d)", r"\1_\2", product_name_clean)
+    product_name_clean = re.sub(r"(\d)([A-Za-z])", r"\1_\2", product_name_clean)
+    product_name_clean = re.sub(r'[®™°º"+]+', "", product_name_clean)
+    product_name_clean = re.sub(r"[.,:/()\-]", " ", product_name_clean)
+    product_name_clean = re.sub(r"\s+", " ", product_name_clean).strip()
     product_name_clean = product_name_clean.replace(" ", "_")
-    product_name_clean = re.sub(r'_+', '_', product_name_clean)
-    product_name_clean = re.sub(r'^[^A-Za]*', '', product_name_clean)
-    product_name_clean = product_name_clean.strip('_')
+    product_name_clean = re.sub(r"_+", "_", product_name_clean)
+    product_name_clean = re.sub(r"^[^A-Za]*", "", product_name_clean)
+    product_name_clean = product_name_clean.strip("_")
 
     return product_name_clean
 
 
 create_shopify_bp = Blueprint("create_shopify_bp", __name__)
 
-
 # ---------------------------
-# 🔐 ACCESS TOKEN FETCH
-# ---------------------------
-def get_shopify_access_token():
-    print("🔐 Requesting Shopify access token...", flush=True)
-
-    if not SHOPIFY_CLIENT_ID or not SHOPIFY_CLIENT_SECRET or not SHOP:
-        raise Exception("Missing SHOPIFY_CLIENT_ID / SHOPIFY_CLIENT_SECRET / SHOPIFY_SHOP")
-
-    url = f"https://{SHOP}/admin/oauth/access_token"
-
-    payload = {
-        "client_id": SHOPIFY_CLIENT_ID,
-        "client_secret": SHOPIFY_CLIENT_SECRET,
-        "grant_type": "client_credentials"
-    }
-
-    resp = requests.post(url, json=payload)
-    print(f"🔁 Token raw response: {resp.text}", flush=True)
-
-    data = resp.json()
-    token = data.get("access_token")
-
-    if not token:
-        raise Exception("Token generation failed")
-
-    print("✅ Shopify access token received", flush=True)
-    return token
-
-
-# ---------------------------
-# SHOPIFY SESSION MANAGEMENT
+# SHOPIFY SESSION
 # ---------------------------
 def setup_shopify_session():
     try:
-        global TOKEN
-
-        if not TOKEN:
-            TOKEN = get_shopify_access_token()
+        if not SHOP or not TOKEN:
+            raise Exception("Missing SHOPIFY_SHOP or SHOPIFY_API_TOKEN")
 
         shopify.Session.setup(api_key="dummy", secret="dummy")
         session = shopify.Session(f"https://{SHOP}", API_VERSION, TOKEN)
@@ -125,7 +87,7 @@ def clear_shopify_session():
 # ---------------------------
 class ImageSearcher:
     @staticmethod
-    def search_by_product_name(product_name: str, limit=10, exact_match=False, cursor=None) -> Dict:
+    def search_by_product_name(product_name: str, limit=10) -> Dict:
         if not product_name:
             return {"success": False, "images": []}
 
@@ -134,7 +96,7 @@ class ImageSearcher:
                 return {"success": False, "images": []}
 
             product_name_clean = convert_title_to_image_name(product_name)
-            search_pattern = f'filename:{product_name_clean}*'
+            search_pattern = f"filename:{product_name_clean}*"
 
             query = f"""
             query {{
@@ -169,6 +131,7 @@ class ImageSearcher:
         except Exception as e:
             print(f"⚠️ Image search error: {e}", flush=True)
             return {"success": False, "images": []}
+
         finally:
             clear_shopify_session()
 
@@ -177,15 +140,14 @@ class ImageSearcher:
 # HELPERS
 # ---------------------------
 def _json_headers():
-    return {"Content-Type": "application/json", "X-Shopify-Access-Token": TOKEN}
+    return {
+        "Content-Type": "application/json",
+        "X-Shopify-Access-Token": TOKEN,
+    }
 
 
 def _rest_url(path):
     return f"https://{SHOP}/admin/api/{API_VERSION}/{path}"
-
-
-def _graphql_url():
-    return f"https://{SHOP}/admin/api/{API_VERSION}/graphql.json"
 
 
 # ---------------------------
@@ -196,7 +158,6 @@ def create_shopify_item():
     try:
         data = request.get_json(force=True)
         record = data.get("fields", {})
-        record_id = data.get("record_id")
 
         qty = _to_number(record.get("Qty given in shopify", 0))
         status = "active" if qty > 0 else "draft"
@@ -207,12 +168,16 @@ def create_shopify_item():
                 "status": status,
                 "variants": [{
                     "price": str(_to_number(record.get("UAE Price", 0))),
-                    "inventory_management": "shopify"
-                }]
+                    "inventory_management": "shopify",
+                }],
             }
         }
 
-        resp = requests.post(_rest_url("products.json"), headers=_json_headers(), json=product_data)
+        resp = requests.post(
+            _rest_url("products.json"),
+            headers=_json_headers(),
+            json=product_data,
+        )
 
         if resp.status_code != 201:
             return jsonify({"error": resp.text}), resp.status_code
@@ -220,7 +185,10 @@ def create_shopify_item():
         product = resp.json()["product"]
         print(f"✅ Product created: {product['id']}", flush=True)
 
-        return jsonify({"success": True, "shopify_id": product["id"]}), 201
+        return jsonify({
+            "success": True,
+            "shopify_id": product["id"]
+        }), 201
 
     except Exception as e:
         print(f"❌ Unexpected error: {e}", flush=True)
